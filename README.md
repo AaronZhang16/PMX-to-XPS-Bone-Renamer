@@ -17,16 +17,18 @@ The panel appears in `View3D > Sidebar > XPS Rename` on Blender 2.80+, or in the
 2. Run your usual CATS cleanup if needed.
 3. Select the armature.
 4. Open `XPS Rename`.
-5. Click `Preview Rename`.
-6. Check the generated Blender text block named `XPS Bone Rename Preview`.
-7. Adjust `Min Confidence`.
-8. Click `Apply Rename`.
-9. Export to XPS.
+5. Optional: choose a custom `.xlsx` rename table with `Choose Rename XLSX`.
+6. Click `Preview Rename`.
+7. Check the generated Blender text block named `XPS Bone Rename Preview`.
+8. Adjust `Min Confidence`.
+9. Click `Apply Rename`.
+10. Export to XPS.
 
 ## Naming Strategy
 
 The add-on uses three levels:
 
+- Custom `.xlsx` mappings are applied first when selected. Column A must contain the current bone name, and column B must contain the target XPS bone name.
 - Core human bones are renamed to XPS-style names such as `pelvis`, `spine lower`, `arm left elbow`, and `leg right knee`.
 - Secondary bones are grouped by category, such as `hair left 01`, `skirt front`, `sleeve right 03`, `ribbon`, `tail`, `wing`, `cloth`, `accessory`, and `weapon`.
 - Unknown bones are left unchanged by default. You can enable `Format Unknown Bones` to safely format numeric names without assigning a semantic category.

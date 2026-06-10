@@ -17,12 +17,15 @@ bl_info = {
 
 import json
 import re
+import zipfile
+import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import bpy
 from bpy.props import BoolProperty, FloatProperty, PointerProperty, StringProperty
 from bpy.types import Operator, Panel, PropertyGroup
+from bpy_extras.io_utils import ImportHelper
 
 
 CORE_KEYWORDS = {
@@ -103,6 +106,7 @@ LearnedEntry = Dict[str, Any]
 LearnedMap = Dict[str, Dict[str, LearnedEntry]]
 SkirtGridInfo = Dict[str, RenameResult]
 StructuredChainInfo = Dict[str, RenameResult]
+CustomRenameMap = Dict[str, str]
 
 
 def clean_text(value: str) -> str:
@@ -236,6 +240,140 @@ def category_match(name: str, table: Dict[str, List[str]]) -> str:
         if contains_any(name, tokens):
             return category
     return ""
+
+
+def xml_text(element: Optional[Any]) -> str:
+    """Collects all text under an XML element.
+
+    Args:
+        element: XML element or None.
+
+    Returns:
+        Concatenated text content.
+    """
+    if element is None:
+        return ""
+    return "".join(element.itertext())
+
+
+def read_shared_strings(workbook_zip: zipfile.ZipFile) -> List[str]:
+    """Reads shared strings from an XLSX archive.
+
+    Args:
+        workbook_zip: Open XLSX zip archive.
+
+    Returns:
+        Shared string table. Returns an empty list when the workbook has no
+        shared string part.
+    """
+    try:
+        raw_xml = workbook_zip.read("xl/sharedStrings.xml")
+    except KeyError:
+        return []
+
+    root = ElementTree.fromstring(raw_xml)
+    namespace = {"main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    strings = []
+    for item in root.findall("main:si", namespace):
+        strings.append(xml_text(item).strip())
+    return strings
+
+
+def cell_column(cell_reference: str) -> str:
+    """Extracts the column letters from an Excel cell reference.
+
+    Args:
+        cell_reference: Cell reference such as ``A1`` or ``BC12``.
+
+    Returns:
+        Uppercase column letters.
+    """
+    match = re.match(r"([A-Za-z]+)", cell_reference or "")
+    return match.group(1).upper() if match else ""
+
+
+def read_cell_value(cell: Any, shared_strings: List[str]) -> str:
+    """Reads a text value from a worksheet cell element.
+
+    Args:
+        cell: XML cell element.
+        shared_strings: Shared string table from the workbook.
+
+    Returns:
+        Cell value as a stripped string.
+    """
+    cell_type = cell.attrib.get("t", "")
+    value_element = cell.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}v")
+    inline_element = cell.find("{http://schemas.openxmlformats.org/spreadsheetml/2006/main}is")
+
+    if cell_type == "inlineStr":
+        return xml_text(inline_element).strip()
+
+    raw_value = xml_text(value_element).strip()
+    if cell_type == "s":
+        try:
+            return shared_strings[int(raw_value)].strip()
+        except (IndexError, ValueError):
+            return ""
+    return raw_value
+
+
+def load_custom_rename_map(file_path: str) -> CustomRenameMap:
+    """Loads exact bone rename mappings from a two-column XLSX file.
+
+    Args:
+        file_path: Local path to an ``.xlsx`` file. Column A is the source bone
+            name, and column B is the target bone name.
+
+    Returns:
+        Mapping from source name to target name. Empty rows and rows without a
+        target name are ignored.
+    """
+    if not file_path:
+        return {}
+
+    path = Path(bpy.path.abspath(file_path))
+    if not path.exists() or path.suffix.lower() != ".xlsx":
+        return {}
+
+    rename_map = {}
+    with zipfile.ZipFile(str(path), "r") as workbook_zip:
+        shared_strings = read_shared_strings(workbook_zip)
+        try:
+            raw_xml = workbook_zip.read("xl/worksheets/sheet1.xml")
+        except KeyError:
+            return {}
+
+        root = ElementTree.fromstring(raw_xml)
+        namespace = {"main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+        for row in root.findall(".//main:row", namespace):
+            row_values = {}
+            for cell in row.findall("main:c", namespace):
+                column = cell_column(cell.attrib.get("r", ""))
+                if column in {"A", "B"}:
+                    row_values[column] = read_cell_value(cell, shared_strings)
+            source_name = row_values.get("A", "").strip()
+            target_name = row_values.get("B", "").strip()
+            if source_name and target_name:
+                rename_map[source_name] = target_name
+    return rename_map
+
+
+def classify_custom(name: str, custom_map: CustomRenameMap) -> Optional[RenameResult]:
+    """Classifies a bone with the user-selected custom XLSX mapping.
+
+    Args:
+        name: Source bone name.
+        custom_map: Mapping loaded from the selected XLSX file.
+
+    Returns:
+        A high-confidence rename result or None when the bone name is not in
+        the custom mapping.
+    """
+    target_name = custom_map.get(name)
+    if not target_name:
+        return None
+    return (target_name, 0.99, "custom xlsx mapping")
 
 
 def has_secondary_semantic(name: str) -> bool:
@@ -833,12 +971,16 @@ def build_rename_plan(armature: Any, settings: Any) -> List[RenamePlanRow]:
     bones = list(armature.data.bones)
     used_names = set()
     plan = []
+    custom_map = load_custom_rename_map(settings.custom_mapping_path)
     skirt_grid_map = build_skirt_grid_map(bones)
     numbered_chain_map = build_numbered_chain_map(bones)
 
     for bone in bones:
-        result = skirt_grid_map.get(bone.name) or numbered_chain_map.get(bone.name)
-        kind = "secondary"
+        result = classify_custom(bone.name, custom_map)
+        kind = "custom"
+        if not result:
+            result = skirt_grid_map.get(bone.name) or numbered_chain_map.get(bone.name)
+            kind = "secondary"
         if not result:
             result = classify_learned(bone.name)
             kind = "learned"
@@ -971,6 +1113,37 @@ class XPSBoneRenamerSettings(PropertyGroup):
         description="Legacy setting kept for saved Blender files; unknown bones are no longer prefixed",
         default="misc",
     )
+    custom_mapping_path = StringProperty(
+        name="Custom XLSX",
+        description="Optional XLSX file with old bone names in column A and target XPS names in column B",
+        default="",
+        subtype="FILE_PATH",
+    )
+
+
+class XPS_OT_select_custom_mapping(Operator, ImportHelper):
+    """Blender operator that selects a custom two-column XLSX mapping file."""
+
+    bl_idname = "xps.select_custom_mapping"
+    bl_label = "Choose Rename XLSX"
+    bl_description = "Choose an XLSX file with source bone names in column A and target names in column B"
+    bl_options = {"REGISTER"}
+
+    filename_ext = ".xlsx"
+    filter_glob = StringProperty(default="*.xlsx", options={"HIDDEN"})
+
+    def execute(self, context: Any) -> Set[str]:
+        """Stores the selected XLSX path in the add-on settings.
+
+        Args:
+            context: Blender operator context.
+
+        Returns:
+            Blender operator status set.
+        """
+        context.scene.xps_bone_renamer.custom_mapping_path = self.filepath
+        self.report({"INFO"}, "Selected custom rename XLSX: %s" % self.filepath)
+        return {"FINISHED"}
 
 
 class XPS_OT_preview_bone_rename(Operator):
@@ -1067,6 +1240,8 @@ class XPS_PT_bone_renamer(Panel):
         settings = context.scene.xps_bone_renamer
 
         layout.prop(settings, "min_confidence")
+        layout.prop(settings, "custom_mapping_path")
+        layout.operator("xps.select_custom_mapping", icon="FILE_FOLDER")
         layout.prop(settings, "rename_secondary")
         layout.prop(settings, "rename_unknown")
         layout.separator()
@@ -1076,6 +1251,7 @@ class XPS_PT_bone_renamer(Panel):
 
 classes = (
     XPSBoneRenamerSettings,
+    XPS_OT_select_custom_mapping,
     XPS_OT_preview_bone_rename,
     XPS_OT_apply_bone_rename,
     XPS_PT_bone_renamer,

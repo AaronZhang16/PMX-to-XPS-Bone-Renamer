@@ -11,10 +11,13 @@ semantic versioning-style version labels.
 
 - Added context-aware structured naming for hair and sleeve chains in the form
   `prefix_parent_child(_side)`.
+- Added optional user-selected `.xlsx` rename mappings. Column A is the current
+  bone name, and column B is the target bone name.
 - Hair and sleeve parent numbers now determine the letter label in ascending
   order, while child numbers determine the final numeric segment.
 - Structured hair and sleeve naming now runs before learned exact mappings so
   older per-model mappings do not interrupt consistent chain naming.
+- Custom `.xlsx` mappings run before automatic and learned rules.
 - Replaced unknown-bone `misc` prefix fallback with conservative numeric
   formatting.
 
