@@ -9,8 +9,8 @@ bl_info = {
     "name": "PMX to XPS Bone Renamer",
     "author": "Codex",
     "version": (0, 1, 0),
-    "blender": (2, 79, 0),
-    "location": "View3D > Tool Shelf/Sidebar > XPS Rename",
+    "blender": (2, 80, 0),
+    "location": "View3D > Sidebar > XPS Rename",
     "description": "Semi-automatic PMX/MMD bone renaming helper for XPS/XNALara workflows.",
     "category": "Rigging",
 }
