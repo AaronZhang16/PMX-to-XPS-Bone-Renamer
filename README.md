@@ -1,3 +1,5 @@
+# **(!!! THIS PROJECT IS STILL UNDER CONSTRUCTION !!!)**
+
 # PMX to XPS Bone Renamer
 
 This workspace contains a Blender add-on for semi-automatic PMX/MMD bone renaming before exporting to XPS/XNALara.
