@@ -6,3 +6,4 @@ __pycache__/
 *.blend2
 .vscode/
 .idea/
+name_reference/

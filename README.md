@@ -37,3 +37,9 @@ The add-on uses three levels:
 - The add-on renames matching vertex groups on meshes using the selected armature, so skin weights stay connected.
 - Low-confidence rows are skipped by default.
 - For unusual clothes, props, or physics rigs, keep `Prefix Unknown Bones` disabled until you inspect the preview.
+
+## Development Style
+
+- All Python functions should include parameter and return type annotations.
+- Function and method documentation should use Google-style docstrings with `Args:` and `Returns:` sections.
+- Keep Blender 2.79 compatibility in mind when editing the add-on, so avoid syntax that requires newer Python versions.
