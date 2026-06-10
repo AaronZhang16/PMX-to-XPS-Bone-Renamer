@@ -8,7 +8,7 @@ bones. It is intended to be run after PMX import and optional CATS cleanup.
 bl_info = {
     "name": "PMX to XPS Bone Renamer",
     "author": "Codex",
-    "version": (0, 1, 0),
+    "version": (0, 1, 6),
     "blender": (2, 80, 0),
     "location": "View3D > Sidebar > XPS Rename",
     "description": "Semi-automatic PMX/MMD bone renaming helper for XPS/XNALara workflows.",
@@ -43,6 +43,8 @@ CORE_KEYWORDS = {
     "toe": ["つま先", "toe"],
     "eye": ["目", "eye"],
     "jaw": ["あご", "顎", "jaw"],
+    "tongue": ["舌", "tongue"],
+    "teeth": ["歯", "牙", "teeth", "tooth"],
 }
 
 FINGER_KEYWORDS = {
@@ -99,6 +101,8 @@ RenameResult = Tuple[str, float, str]
 RenamePlanRow = Dict[str, Any]
 LearnedEntry = Dict[str, Any]
 LearnedMap = Dict[str, Dict[str, LearnedEntry]]
+SkirtGridInfo = Dict[str, RenameResult]
+StructuredChainInfo = Dict[str, RenameResult]
 
 
 def clean_text(value: str) -> str:
@@ -263,6 +267,112 @@ def chain_suffix(name: str) -> str:
     return " %d" % int(numbers[-1])
 
 
+def semantic_chain_prefix(name: str, bone: Any) -> str:
+    """Builds a semantic XPS prefix for hair and sleeve chain bones.
+
+    Args:
+        name: Source bone name.
+        bone: Blender bone used for optional side inference.
+
+    Returns:
+        XPS prefix such as ``hair side left`` or ``sleeve right``. Returns an
+        empty string when the name is not a supported chain category.
+    """
+    category = category_match(name, SECONDARY_KEYWORDS)
+    side = side_from_name(name) or side_from_position(bone)
+    if category == "side_hair":
+        return "hair side%s" % side_label(side)
+    if category == "front_hair":
+        return "hair front%s" % side_label(side)
+    if category == "back_hair":
+        return "hair back%s" % side_label(side)
+    if category == "hair":
+        return "hair%s" % side_label(side)
+    if category == "sleeve":
+        return "sleeve%s" % side_label(side)
+    return ""
+
+
+def parse_numbered_chain_name(name: str) -> Optional[Tuple[str, int, int, str]]:
+    """Parses ``prefix_parent_child_side`` style hair/sleeve names.
+
+    Args:
+        name: Source bone name.
+
+    Returns:
+        Tuple of ``(raw_prefix, parent_number, child_number, side_suffix)`` or
+        None when the name does not contain a supported structural pattern.
+    """
+    no_number_prefix = re.match(r"^([^0-9_]+)_(\d+)_(\d+)(?:_([LR]))?$", name, re.IGNORECASE)
+    if no_number_prefix:
+        return (
+            no_number_prefix.group(1) + "#two_number",
+            int(no_number_prefix.group(3)),
+            int(no_number_prefix.group(2)),
+            (no_number_prefix.group(4) or "").upper(),
+        )
+
+    numbered_prefix = re.match(r"^(.*\D)(\d+)_(\d+)(?:_([LR]))?$", name, re.IGNORECASE)
+    if numbered_prefix:
+        return (
+            numbered_prefix.group(1) + "#numbered_prefix",
+            int(numbered_prefix.group(2)),
+            int(numbered_prefix.group(3)),
+            (numbered_prefix.group(4) or "").upper(),
+        )
+
+    return None
+
+
+def build_numbered_chain_map(bones: List[Any]) -> StructuredChainInfo:
+    """Builds context-aware names for numbered hair and sleeve chains.
+
+    Names such as ``Sleeve1_2_R`` or ``BackHair3_1_L`` are grouped by their
+    semantic XPS prefix and raw source prefix. Within each group, the first
+    number is treated as the parent-chain number and converted to a letter.
+    The second number is treated as the child segment number.
+
+    Args:
+        bones: Blender bone objects from an armature.
+
+    Returns:
+        Mapping from original bone name to rename result tuple.
+    """
+    rows = []
+    for bone in bones:
+        parsed = parse_numbered_chain_name(bone.name)
+        if not parsed:
+            continue
+        raw_prefix, parent_number, child_number, side_suffix = parsed
+        semantic_prefix = semantic_chain_prefix(bone.name, bone)
+        if not semantic_prefix:
+            continue
+        group_key = (semantic_prefix, raw_prefix, side_suffix)
+        rows.append((bone.name, group_key, semantic_prefix, parent_number, child_number))
+
+    groups = {}
+    for name, group_key, semantic_prefix, parent_number, child_number in rows:
+        groups.setdefault(group_key, []).append((name, semantic_prefix, parent_number, child_number))
+
+    chain_map = {}
+    for group_rows in groups.values():
+        parents = sorted({parent_number for _, _, parent_number, _ in group_rows})
+        children = sorted({child_number for _, _, _, child_number in group_rows})
+        parent_to_letter = {
+            parent_number: letter_for_index(index)
+            for index, parent_number in enumerate(parents)
+        }
+        child_offset = 1 if children and children[0] == 0 else 0
+        for name, semantic_prefix, parent_number, child_number in group_rows:
+            new_name = "%s %s %d" % (
+                semantic_prefix,
+                parent_to_letter[parent_number],
+                child_number + child_offset,
+            )
+            chain_map[name] = (new_name, 0.84, "structured hair/sleeve chain")
+    return chain_map
+
+
 def classify_structured_skirt(name: str) -> Optional[RenameResult]:
     """Classifies common Chinese skirt-grid names such as ``裙_6_1``.
 
@@ -273,7 +383,7 @@ def classify_structured_skirt(name: str) -> Optional[RenameResult]:
         A rename result tuple or None when the name is not a supported skirt
         grid name.
     """
-    match = re.match(r"^裙_(\d+)_(\d+)$", name)
+    match = re.match(r"^(?:裙|skirt)_(\d+)_(\d+)$", name, re.IGNORECASE)
     if not match:
         return None
 
@@ -303,6 +413,126 @@ def classify_structured_skirt(name: str) -> Optional[RenameResult]:
     return ("skirt %s %d" % (column_name, row_index), 0.86, "structured skirt pattern")
 
 
+def parse_skirt_grid_name(name: str) -> Optional[Tuple[int, int]]:
+    """Parses CATS-style skirt grid names.
+
+    Args:
+        name: Bone name in the form ``name_child_parent``.
+
+    Returns:
+        Tuple of ``(child_number, parent_number)`` or None when the name does
+        not look like a skirt grid bone.
+    """
+    if not contains_any(name, SECONDARY_KEYWORDS["skirt"]):
+        return None
+    match = re.match(r"^.+_(\d+)_(\d+)$", name)
+    if not match:
+        return None
+    return (int(match.group(1)), int(match.group(2)))
+
+
+def group_items_evenly(items: List[int], group_count: int) -> Dict[int, int]:
+    """Assigns sorted items to evenly distributed one-based groups.
+
+    Args:
+        items: Sorted parent numbers.
+        group_count: Number of target groups.
+
+    Returns:
+        Mapping from parent number to one-based group number.
+    """
+    if not items:
+        return {}
+
+    item_count = len(items)
+    groups = {}
+    for index, item in enumerate(items):
+        group = int(index * group_count / item_count) + 1
+        groups[item] = min(group, group_count)
+    return groups
+
+
+def skirt_prefix_for_group(group_number: int) -> str:
+    """Returns the XPS skirt prefix for an eight-way parent group.
+
+    Args:
+        group_number: One-based group number from 1 to 8.
+
+    Returns:
+        Prefix such as ``skirt front left``.
+    """
+    if group_number == 1:
+        return "skirt front left"
+    if group_number in {2, 3}:
+        return "skirt side left"
+    if group_number == 4:
+        return "skirt back left"
+    if group_number == 5:
+        return "skirt back right"
+    if group_number in {6, 7}:
+        return "skirt side right"
+    return "skirt front right"
+
+
+def letter_for_index(index: int) -> str:
+    """Converts a zero-based index to a lowercase letter label.
+
+    Args:
+        index: Zero-based position.
+
+    Returns:
+        A letter label. Values beyond ``z`` continue as ``z`` to avoid
+        generating unusual multi-letter labels in XPS names.
+    """
+    return chr(ord("a") + min(index, 25))
+
+
+def build_skirt_grid_map(bones: List[Any]) -> SkirtGridInfo:
+    """Builds context-aware skirt grid names for all matching skirt bones.
+
+    CATS skirt names commonly contain two numbers: ``name_child_parent``. The
+    parent number identifies a large skirt chain, while the child number is a
+    segment within that chain. Parent numbers are evenly divided into eight
+    groups around the skirt, then converted to XPS-style names.
+
+    Args:
+        bones: Blender bone objects from an armature.
+
+    Returns:
+        Mapping from original bone name to rename result tuple.
+    """
+    parsed_rows = []
+    parent_numbers = set()
+    for bone in bones:
+        parsed = parse_skirt_grid_name(bone.name)
+        if not parsed:
+            continue
+        child_number, parent_number = parsed
+        parsed_rows.append((bone.name, child_number, parent_number))
+        parent_numbers.add(parent_number)
+
+    parent_to_group = group_items_evenly(sorted(parent_numbers), 8)
+    prefix_to_parents = {}
+    for parent_number in sorted(parent_numbers):
+        prefix = skirt_prefix_for_group(parent_to_group[parent_number])
+        prefix_to_parents.setdefault(prefix, []).append(parent_number)
+
+    parent_to_letter = {}
+    for prefix, parents in prefix_to_parents.items():
+        reverse = "right" in prefix
+        ordered_parents = sorted(parents, reverse=reverse)
+        for index, parent_number in enumerate(ordered_parents):
+            parent_to_letter[parent_number] = letter_for_index(index)
+
+    skirt_map = {}
+    for name, child_number, parent_number in parsed_rows:
+        prefix = skirt_prefix_for_group(parent_to_group[parent_number])
+        letter = parent_to_letter[parent_number]
+        new_name = "%s %s %d" % (prefix, letter, child_number + 1)
+        skirt_map[name] = (new_name, 0.88, "structured skirt grid")
+    return skirt_map
+
+
 def classify_hair(name: str, bone: Any) -> Optional[RenameResult]:
     """Classifies hair bones before positional words can trigger core rules.
 
@@ -320,11 +550,11 @@ def classify_hair(name: str, bone: Any) -> Optional[RenameResult]:
     side = side_from_name(name) or side_from_position(bone)
     suffix = chain_suffix(name)
     if category == "side_hair":
-        return ("side hair%s%s" % (side_label(side), suffix), 0.76, "side hair keyword")
+        return ("hair side%s%s" % (side_label(side), suffix), 0.76, "side hair keyword")
     if category == "front_hair":
-        return ("front hair%s%s" % (side_label(side), suffix), 0.76, "front hair keyword")
+        return ("hair front%s%s" % (side_label(side), suffix), 0.76, "front hair keyword")
     if category == "back_hair":
-        return ("back hair%s%s" % (side_label(side), suffix), 0.76, "back hair keyword")
+        return ("hair back%s%s" % (side_label(side), suffix), 0.76, "back hair keyword")
     return ("hair%s%s" % (side_label(side), suffix), 0.72, "hair keyword")
 
 
@@ -454,6 +684,17 @@ def classify_core(name: str, bone: Any) -> Optional[RenameResult]:
         return ("head eyeball%s" % side_label(side), 0.88 if side else 0.70, "eye keyword")
     if contains_any(name, CORE_KEYWORDS["jaw"]):
         return ("jaw", 0.82, "jaw keyword")
+    if contains_any(name, CORE_KEYWORDS["tongue"]):
+        suffix = number_suffix(name)
+        suffix_text = (" %d" % suffix) if suffix is not None else ""
+        return ("head tongue%s" % suffix_text, 0.82, "tongue keyword")
+    if contains_any(name, CORE_KEYWORDS["teeth"]):
+        lower = clean_text(name)
+        if "down" in lower or "lower" in lower or "下" in lower:
+            return ("head teeth lower", 0.82, "teeth keyword")
+        if "up" in lower or "upper" in lower or "上" in lower:
+            return ("head teeth upper", 0.82, "teeth keyword")
+        return ("head teeth", 0.78, "teeth keyword")
 
     return None
 
@@ -523,10 +764,15 @@ def build_rename_plan(armature: Any, settings: Any) -> List[RenamePlanRow]:
     bones = list(armature.data.bones)
     used_names = set()
     plan = []
+    skirt_grid_map = build_skirt_grid_map(bones)
+    numbered_chain_map = build_numbered_chain_map(bones)
 
     for bone in bones:
-        result = classify_learned(bone.name)
-        kind = "learned"
+        result = skirt_grid_map.get(bone.name) or numbered_chain_map.get(bone.name)
+        kind = "secondary"
+        if not result:
+            result = classify_learned(bone.name)
+            kind = "learned"
         if not result:
             result = classify_hair(bone.name, bone) or classify_structured_skirt(bone.name)
             kind = "secondary"

@@ -5,6 +5,50 @@ All notable changes to PMX to XPS Bone Renamer are documented in this file.
 The format follows the spirit of Keep a Changelog, and this project uses
 semantic versioning-style version labels.
 
+## [0.1.6] - 2026-06-10
+
+### Changed
+
+- Added context-aware structured naming for hair and sleeve chains in the form
+  `prefix_parent_child(_side)`.
+- Hair and sleeve parent numbers now determine the letter label in ascending
+  order, while child numbers determine the final numeric segment.
+- Structured hair and sleeve naming now runs before learned exact mappings so
+  older per-model mappings do not interrupt consistent chain naming.
+
+### Fixed
+
+- Corrected numbered hair/sleeve parsing based on source name shape.
+- Names like `Sleeve_0_1_R` now treat the second number as the parent/letter
+  index and the first number as the child segment.
+- Names like `Sleeve1_1_R` and `MiddleBackHair1_2` now treat the number in the
+  prefix as the parent/letter index and the suffix number as the child segment.
+- Separated the two source-name formats internally so zero-based and one-based
+  child numbering do not interfere with each other.
+
+## [0.1.5] - 2026-06-10
+
+### Changed
+
+- Reworked skirt grid fallback naming to use the full armature context instead
+  of isolated per-bone matching.
+- CATS-style skirt names in the form `name_child_parent` now use parent numbers
+  to divide skirt chains into eight ordered groups:
+  `skirt front left`, `skirt side left`, `skirt back left`,
+  `skirt back right`, `skirt side right`, and `skirt front right`.
+- Parent chains on the left half assign letters from smaller parent numbers to
+  earlier letters, while right-half chains assign letters from larger parent
+  numbers to earlier letters.
+
+## [0.1.4] - 2026-06-10
+
+### Fixed
+
+- Changed side/front/back hair fallback names to keep the base structure first,
+  for example `hair side left 2` instead of `side hair left 2`.
+- Added tongue and teeth fallback naming so `Tongue_01`, `DownTeeth`, and
+  `UpTeeth` become head-group bones instead of unknown `misc` bones.
+
 ## [0.1.3] - 2026-06-10
 
 ### Fixed
@@ -66,4 +110,3 @@ semantic versioning-style version labels.
 - Added core humanoid, secondary clothing, hair, accessory, and unknown-bone
   classification logic.
 - Added PowerShell script for building an installable Blender add-on zip.
-
