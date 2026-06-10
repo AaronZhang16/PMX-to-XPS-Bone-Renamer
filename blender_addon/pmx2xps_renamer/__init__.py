@@ -373,6 +373,75 @@ def build_numbered_chain_map(bones: List[Any]) -> StructuredChainInfo:
     return chain_map
 
 
+def strip_side_suffix(name: str) -> Tuple[str, str]:
+    """Removes a trailing side suffix from a source bone name.
+
+    Args:
+        name: Source bone name that may end in ``_L`` or ``_R``.
+
+    Returns:
+        Tuple of ``(name_without_side, side_label)``.
+    """
+    match = re.match(r"^(.*)_([LR])$", name, re.IGNORECASE)
+    if not match:
+        return (name, "")
+    side = "left" if match.group(2).upper() == "L" else "right"
+    return (match.group(1), side)
+
+
+def classify_unknown(name: str) -> Optional[RenameResult]:
+    """Formats unknown bones without assigning them to a semantic category.
+
+    The fallback intentionally keeps the original prefix intact. It only
+    normalizes common numeric structures so unclassified bones are easier to
+    scan in XPS.
+
+    Args:
+        name: Source bone name.
+
+    Returns:
+        A low-confidence rename result or None when no safe formatting rule
+        applies.
+    """
+    name_without_side, side = strip_side_suffix(name)
+
+    two_number_match = re.match(r"^(.+?)_(\d+)_(\d+)$", name_without_side)
+    if two_number_match:
+        prefix = two_number_match.group(1)
+        parent_number = int(two_number_match.group(2))
+        child_number = int(two_number_match.group(3))
+        side_text = side_label(side)
+        return (
+            "%s%s %s %d" % (prefix, side_text, letter_for_index(parent_number), child_number),
+            0.30,
+            "unknown numbered chain",
+        )
+
+    one_number_match = re.match(r"^(.+?)_(\d+)$", name_without_side)
+    if one_number_match:
+        prefix = one_number_match.group(1)
+        number = int(one_number_match.group(2))
+        side_text = side_label(side)
+        return (
+            "%s%s %d" % (prefix, side_text, number),
+            0.30,
+            "unknown numeric suffix",
+        )
+
+    trailing_number_match = re.match(r"^(.*?)(\d+)$", name_without_side)
+    if trailing_number_match and trailing_number_match.group(1):
+        prefix = trailing_number_match.group(1).rstrip("_ ")
+        number = int(trailing_number_match.group(2))
+        side_text = side_label(side)
+        return (
+            "%s%s %d" % (prefix, side_text, number),
+            0.30,
+            "unknown trailing number",
+        )
+
+    return None
+
+
 def classify_structured_skirt(name: str) -> Optional[RenameResult]:
     """Classifies common Chinese skirt-grid names such as ``裙_6_1``.
 
@@ -783,8 +852,9 @@ def build_rename_plan(armature: Any, settings: Any) -> List[RenamePlanRow]:
             result = classify_secondary(bone.name, bone)
             kind = "secondary"
         if not result and settings.rename_unknown:
-            result = ("%s %s" % (settings.unknown_prefix.strip() or "misc", bone.name), 0.30, "fallback")
-            kind = "unknown"
+            result = classify_unknown(bone.name)
+            if result:
+                kind = "unknown"
 
         if result:
             new_name, confidence, reason = result
@@ -892,13 +962,13 @@ class XPSBoneRenamerSettings(PropertyGroup):
         default=True,
     )
     rename_unknown = BoolProperty(
-        name="Prefix Unknown Bones",
-        description="Prefix unclassified bones instead of leaving them unchanged",
+        name="Format Unknown Bones",
+        description="Safely format numeric unknown bones instead of adding semantic categories",
         default=False,
     )
     unknown_prefix = StringProperty(
         name="Unknown Prefix",
-        description="Prefix used when Prefix Unknown Bones is enabled",
+        description="Legacy setting kept for saved Blender files; unknown bones are no longer prefixed",
         default="misc",
     )
 
@@ -999,9 +1069,6 @@ class XPS_PT_bone_renamer(Panel):
         layout.prop(settings, "min_confidence")
         layout.prop(settings, "rename_secondary")
         layout.prop(settings, "rename_unknown")
-        if settings.rename_unknown:
-            layout.prop(settings, "unknown_prefix")
-
         layout.separator()
         layout.operator("xps.preview_bone_rename", icon="TEXT")
         layout.operator("xps.apply_bone_rename", icon="ARMATURE_DATA")

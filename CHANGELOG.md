@@ -15,6 +15,8 @@ semantic versioning-style version labels.
   order, while child numbers determine the final numeric segment.
 - Structured hair and sleeve naming now runs before learned exact mappings so
   older per-model mappings do not interrupt consistent chain naming.
+- Replaced unknown-bone `misc` prefix fallback with conservative numeric
+  formatting.
 
 ### Fixed
 
@@ -25,6 +27,11 @@ semantic versioning-style version labels.
   prefix as the parent/letter index and the suffix number as the child segment.
 - Separated the two source-name formats internally so zero-based and one-based
   child numbering do not interfere with each other.
+- Unknown bones in the form `prefix_numberA_numberB(_side)` now become
+  `prefix side letter numberB`, while `prefix_number(_side)` becomes
+  `prefix side number`.
+- Unknown bones ending with a trailing number now get a space before the number;
+  names without safe numeric structure remain unchanged.
 
 ## [0.1.5] - 2026-06-10
 

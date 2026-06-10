@@ -1,5 +1,3 @@
-# **(!!! THIS PROJECT IS STILL UNDER CONSTRUCTION !!!)**
-
 # PMX to XPS Bone Renamer
 
 This workspace contains a Blender add-on for semi-automatic PMX/MMD bone renaming before exporting to XPS/XNALara.
@@ -31,14 +29,14 @@ The add-on uses three levels:
 
 - Core human bones are renamed to XPS-style names such as `pelvis`, `spine lower`, `arm left elbow`, and `leg right knee`.
 - Secondary bones are grouped by category, such as `hair left 01`, `skirt front`, `sleeve right 03`, `ribbon`, `tail`, `wing`, `cloth`, `accessory`, and `weapon`.
-- Unknown bones are left unchanged by default. You can enable `Prefix Unknown Bones` to rename them as `misc original_name`.
+- Unknown bones are left unchanged by default. You can enable `Format Unknown Bones` to safely format numeric names without assigning a semantic category.
 
 ## Safety Notes
 
 - Always run `Preview Rename` before applying.
 - The add-on renames matching vertex groups on meshes using the selected armature, so skin weights stay connected.
 - Low-confidence rows are skipped by default.
-- For unusual clothes, props, or physics rigs, keep `Prefix Unknown Bones` disabled until you inspect the preview.
+- For unusual clothes, props, or physics rigs, keep `Format Unknown Bones` disabled until you inspect the preview.
 
 ## Development Style
 
