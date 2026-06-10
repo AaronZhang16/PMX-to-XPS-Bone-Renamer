@@ -54,8 +54,11 @@ FINGER_KEYWORDS = {
 }
 
 SECONDARY_KEYWORDS = {
-    "hair": ["髪", "毛", "hair", "bang", "kami"],
-    "skirt": ["スカート", "skirt"],
+    "side_hair": ["側長髮", "侧长发", "側hair", "sidehair", "side hair"],
+    "front_hair": ["劉海", "刘海", "bang", "fronthair", "front hair"],
+    "back_hair": ["backhair", "back hair"],
+    "hair": ["髪", "髮", "发", "毛", "hair", "bang", "kami", "劉海", "刘海", "長髮", "长发"],
+    "skirt": ["スカート", "skirt", "裙"],
     "sleeve": ["袖", "sode", "sleeve"],
     "coat": ["coat", "jacket", "mantle"],
     "belt": ["belt"],
@@ -81,8 +84,10 @@ SECONDARY_KEYWORDS = {
     "physics": ["物理", "physics", "jiggle"],
 }
 
-LEFT_TOKENS = ["左", "左側", "_l", ".l", "-l", " l ", "left"]
-RIGHT_TOKENS = ["右", "右側", "_r", ".r", "-r", " r ", "right"]
+LEFT_TOKENS = ["左", "左側", "_l", ".l", "-l", "left"]
+RIGHT_TOKENS = ["右", "右側", "_r", ".r", "-r", "right"]
+LEFT_SUFFIX_PATTERN = re.compile(r"(?:^|[^a-z0-9])(?:l|left)$", re.IGNORECASE)
+RIGHT_SUFFIX_PATTERN = re.compile(r"(?:^|[^a-z0-9])(?:r|right)$", re.IGNORECASE)
 
 TWIST_TOKENS = ["捩", "twist", "回転", "roll"]
 IK_TOKENS = ["ik", "ＩＫ"]
@@ -135,10 +140,15 @@ def side_from_name(name: str) -> str:
         ``"left"``, ``"right"``, or an empty string when no side token is
         found.
     """
-    if contains_any(name, LEFT_TOKENS):
+    normalized = clean_text(name)
+    if RIGHT_SUFFIX_PATTERN.search(normalized):
+        return "right"
+    if LEFT_SUFFIX_PATTERN.search(normalized):
         return "left"
     if contains_any(name, RIGHT_TOKENS):
         return "right"
+    if contains_any(name, LEFT_TOKENS):
+        return "left"
     return ""
 
 
@@ -224,6 +234,100 @@ def category_match(name: str, table: Dict[str, List[str]]) -> str:
     return ""
 
 
+def has_secondary_semantic(name: str) -> bool:
+    """Checks whether a name contains an object/category keyword.
+
+    Args:
+        name: Bone name to inspect.
+
+    Returns:
+        True when the name is more likely a secondary object bone than a core
+        body bone.
+    """
+    return bool(category_match(name, SECONDARY_KEYWORDS))
+
+
+def chain_suffix(name: str) -> str:
+    """Extracts a stable chain number from names such as ``Hair1_2_L``.
+
+    Args:
+        name: Bone name containing one or more numeric fragments.
+
+    Returns:
+        A leading-space numeric suffix, or an empty string when no number is
+        found.
+    """
+    numbers = re.findall(r"\d+", name)
+    if not numbers:
+        return ""
+    return " %d" % int(numbers[-1])
+
+
+def classify_structured_skirt(name: str) -> Optional[RenameResult]:
+    """Classifies common Chinese skirt-grid names such as ``裙_6_1``.
+
+    Args:
+        name: Source bone name.
+
+    Returns:
+        A rename result tuple or None when the name is not a supported skirt
+        grid name.
+    """
+    match = re.match(r"^裙_(\d+)_(\d+)$", name)
+    if not match:
+        return None
+
+    row_index = int(match.group(1)) + 1
+    column_index = int(match.group(2))
+    column_names = {
+        0: "front middle",
+        1: "front left a",
+        2: "front left b",
+        3: "front left c",
+        4: "back left c",
+        5: "back left b",
+        6: "back left a",
+        7: "back right a",
+        8: "back right b",
+        9: "side right c",
+        10: "side right b",
+        11: "side right a",
+        12: "front right a",
+        13: "front right b",
+        14: "front right c",
+        15: "front right d",
+    }
+    column_name = column_names.get(column_index)
+    if not column_name:
+        return None
+    return ("skirt %s %d" % (column_name, row_index), 0.86, "structured skirt pattern")
+
+
+def classify_hair(name: str, bone: Any) -> Optional[RenameResult]:
+    """Classifies hair bones before positional words can trigger core rules.
+
+    Args:
+        name: Source bone name.
+        bone: Blender bone used for optional side inference.
+
+    Returns:
+        A rename result tuple or None when the name does not look like hair.
+    """
+    category = category_match(name, SECONDARY_KEYWORDS)
+    if category not in {"hair", "side_hair", "front_hair", "back_hair"}:
+        return None
+
+    side = side_from_name(name) or side_from_position(bone)
+    suffix = chain_suffix(name)
+    if category == "side_hair":
+        return ("side hair%s%s" % (side_label(side), suffix), 0.76, "side hair keyword")
+    if category == "front_hair":
+        return ("front hair%s%s" % (side_label(side), suffix), 0.76, "front hair keyword")
+    if category == "back_hair":
+        return ("back hair%s%s" % (side_label(side), suffix), 0.76, "back hair keyword")
+    return ("hair%s%s" % (side_label(side), suffix), 0.72, "hair keyword")
+
+
 def load_learned_map() -> LearnedMap:
     """Loads learned name mappings from ``learned_name_map.json``.
 
@@ -291,6 +395,8 @@ def classify_core(name: str, bone: Any) -> Optional[RenameResult]:
     lower_name = clean_text(name)
 
     if contains_any(name, IK_TOKENS):
+        return None
+    if has_secondary_semantic(name):
         return None
 
     if contains_any(name, TWIST_TOKENS):
@@ -362,13 +468,20 @@ def classify_secondary(name: str, bone: Any) -> Optional[RenameResult]:
     Returns:
         A rename result tuple or None when no secondary category matches.
     """
+    structured_skirt = classify_structured_skirt(name)
+    if structured_skirt:
+        return structured_skirt
+
+    hair_result = classify_hair(name, bone)
+    if hair_result:
+        return hair_result
+
     category = category_match(name, SECONDARY_KEYWORDS)
     if not category:
         return None
 
     side = side_from_name(name) or side_from_position(bone)
-    suffix = number_suffix(name)
-    suffix_text = (" %d" % suffix) if suffix is not None else ""
+    suffix_text = chain_suffix(name)
     return ("%s%s%s" % (category, side_label(side), suffix_text), 0.62, category + " keyword")
 
 
@@ -414,6 +527,9 @@ def build_rename_plan(armature: Any, settings: Any) -> List[RenamePlanRow]:
     for bone in bones:
         result = classify_learned(bone.name)
         kind = "learned"
+        if not result:
+            result = classify_hair(bone.name, bone) or classify_structured_skirt(bone.name)
+            kind = "secondary"
         if not result:
             result = classify_core(bone.name, bone)
             kind = "core"
